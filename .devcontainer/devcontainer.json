@@ -1,0 +1,35 @@
+{
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "eamodio.gitlens",
+                "ms-python.python",
+                "ms-python.vscode-pylance",
+                "mutantdino.resourcemonitor",
+                "EditorConfig.EditorConfig"
+            ],
+            "settings": {
+                "resmon.show.battery": false,
+                "resmon.show.cpufreq": false
+            },
+        }
+    },
+    "mounts": [
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.aws/,target=/home/vscode/.aws,type=bind,consistency=cached"
+    ],
+    "remoteEnv": {
+        "AWS_DEFAULT_REGION": "ap-southeast-2",
+        "AWS_PROFILE": "sktansandbox"
+    },
+    "features": {
+        "aws-cli": "latest",
+        "node": {
+            "version": "lts",
+            "nodeGypDependencies": true
+        }
+    },
+    "postCreateCommand": ".devcontainer/post_create.sh"
+}

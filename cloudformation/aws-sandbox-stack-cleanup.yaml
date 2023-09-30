@@ -1,0 +1,216 @@
+Resources:
+  deleterlambdaServiceRoleB641ED39:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - :iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/deleter-lambda/ServiceRole/Resource
+  deleterlambdaServiceRoleDefaultPolicy36B4FB73:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: cloudformation:DeleteStack
+            Effect: Allow
+            Resource: "*"
+        Version: "2012-10-17"
+      PolicyName: deleterlambdaServiceRoleDefaultPolicy36B4FB73
+      Roles:
+        - Ref: deleterlambdaServiceRoleB641ED39
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/deleter-lambda/ServiceRole/DefaultPolicy/Resource
+  deleterlambda17615F6E:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import json
+
+          import boto3
+
+          cfn_client = boto3.client("cloudformation")
+
+
+          def lambda_handler(event, context):
+              stack_arn = event["stack_arn"]
+              cfn_client.delete_stack(StackName=stack_arn)
+      Handler: index.lambda_handler
+      Role:
+        Fn::GetAtt:
+          - deleterlambdaServiceRoleB641ED39
+          - Arn
+      Runtime: python3.9
+    DependsOn:
+      - deleterlambdaServiceRoleDefaultPolicy36B4FB73
+      - deleterlambdaServiceRoleB641ED39
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/deleter-lambda/Resource
+  schedulerrole9B80A9F3:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+        Version: "2012-10-17"
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/scheduler-role/Resource
+  schedulerroleDefaultPolicyA459C234:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: lambda:InvokeFunction
+            Effect: Allow
+            Resource:
+              Fn::GetAtt:
+                - deleterlambda17615F6E
+                - Arn
+        Version: "2012-10-17"
+      PolicyName: schedulerroleDefaultPolicyA459C234
+      Roles:
+        - Ref: schedulerrole9B80A9F3
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/scheduler-role/DefaultPolicy/Resource
+  scheduledeletelambdaServiceRole8831239C:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - :iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/schedule-delete-lambda/ServiceRole/Resource
+  scheduledeletelambdaServiceRoleDefaultPolicy961AA388:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - iam:PassRole
+              - scheduler:CreateSchedule
+            Effect: Allow
+            Resource: "*"
+        Version: "2012-10-17"
+      PolicyName: scheduledeletelambdaServiceRoleDefaultPolicy961AA388
+      Roles:
+        - Ref: scheduledeletelambdaServiceRole8831239C
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/schedule-delete-lambda/ServiceRole/DefaultPolicy/Resource
+  scheduledeletelambda006CE9C4:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import os
+          from datetime import datetime, timezone, timedelta
+          import boto3
+
+          scheduler_client = boto3.client("scheduler")
+
+
+          def lambda_handler(event, context):
+              stack_id = event["detail"]["stack-id"]
+
+              flex_window = {"Mode": "OFF"}
+              lambda_target = {
+                  "RoleArn": os.environ["SCHEDULER_ROLE_ARN"],
+                  "Arn": os.environ["DELETER_LAMBDA_ARN"],
+                  "Input": f"{ 'stack_arn': '{stack_id}' }",
+              }
+
+              dt = datetime.now(timezone.utc) + timedelta(hours=48)
+
+              scheduler_client.create_schedule(
+                  Name=f"cfn-{stack_id.split('/')[-1]}",
+                  ScheduleExpression=f"at({dt.strftime('%Y-%m-%dT%H:%M:%S')})",
+                  Target=lambda_target,
+                  ScheduleExpressionTimezone="Etc/UTC",
+                  FlexibleTimeWindow=flex_window,
+              )
+      Environment:
+        Variables:
+          SCHEDULER_ROLE_ARN:
+            Fn::GetAtt:
+              - schedulerrole9B80A9F3
+              - Arn
+          DELETER_LAMBDA_ARN:
+            Fn::GetAtt:
+              - deleterlambda17615F6E
+              - Arn
+      Handler: index.lambda_handler
+      Role:
+        Fn::GetAtt:
+          - scheduledeletelambdaServiceRole8831239C
+          - Arn
+      Runtime: python3.9
+    DependsOn:
+      - scheduledeletelambdaServiceRoleDefaultPolicy961AA388
+      - scheduledeletelambdaServiceRole8831239C
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/schedule-delete-lambda/Resource
+  cfnstackcreatecompleteruleFFC3AAA8:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        detail:
+          status-details:
+            status:
+              - CREATE_COMPLETE
+        detail-type:
+          - CloudFormation Stack Status Change
+        source:
+          - aws.cloudformation
+      State: ENABLED
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - scheduledeletelambda006CE9C4
+              - Arn
+          Id: Target0
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/cfn-stack-create-complete-rule/Resource
+  cfnstackcreatecompleteruleAllowEventRuleSandboxTimeoutStackscheduledeletelambda965C4565E2666C45:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Fn::GetAtt:
+          - scheduledeletelambda006CE9C4
+          - Arn
+      Principal: events.amazonaws.com
+      SourceArn:
+        Fn::GetAtt:
+          - cfnstackcreatecompleteruleFFC3AAA8
+          - Arn
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/cfn-stack-create-complete-rule/AllowEventRuleSandboxTimeoutStackscheduledeletelambda965C4565
+  CDKMetadata:
+    Type: AWS::CDK::Metadata
+    Properties:
+      Analytics: v2:deflate64:H4sIAAAAAAAA/02Kyw7CIBBFv6V7OopddW3imuAHNJRiHMsj4aFpCP8u0i5cnTN3zgXGEWgnPqGXy9prnCHfo5ArqdOUtTDzIiDfkpURnSXXh/13przBEOpVCAoDmTutfo9G5jTKrXXNClFvZWOoWTqyylIIV8ElL/fp8ELYFp/OngagZ6BD9wqIvU82olHAd34BPBOPEb8AAAA=
+    Metadata:
+      aws:cdk:path: SandboxTimeoutStack/CDKMetadata/Default
